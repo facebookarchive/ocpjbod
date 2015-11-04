@@ -19,18 +19,10 @@ Simply use make.
 Run make install.
 
 ## How ocpjbod works
-ocpjbod control SCSI enclosure through SES commands and SCSI read/write
+ocpjbod controls SCSI enclosure through SES commands and SCSI read/write
 buffer commands
 
 ## Full documentation
-
-
-## Join the ocpjbod community
-* Website:
-* Facebook page:
-* Mailing list
-* irc:
-See the CONTRIBUTING file for how to help out.
 
 ## License
 ocpjbod is BSD-licensed. We also provide an additional patent grant.
