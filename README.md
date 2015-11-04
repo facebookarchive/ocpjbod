@@ -10,7 +10,7 @@ ocpjbod sensor /dev/sg1
 ## Requirements
 ocpjbod requires or works with
 * Linux
-* sg3_utils-libs (>= 1.33)
+* sg3_utils-libs (>= 1.28)
 
 ## Building ocpjbod
 Simply use make.
@@ -21,8 +21,6 @@ Run make install.
 ## How ocpjbod works
 ocpjbod controls SCSI enclosure through SES commands and SCSI read/write
 buffer commands
-
-## Full documentation
 
 ## License
 ocpjbod is BSD-licensed. We also provide an additional patent grant.
