@@ -1,33 +1,22 @@
 # Contributing to ocpjbod
-We want to make contributing to this project as easy and transparent as
-possible.
-
-## Our Development Process
-At this time, we manually sync internal repository with GitHub repository.
-
-## Pull Requests
-We actively welcome your pull requests.
-1. Fork the repo and create your branch.
-2. If you haven't already, complete the Contributor License Agreement ("CLA").
 
 ## Contributor License Agreement ("CLA")
-In order to accept your pull request, we need you to submit a CLA. You only need
-to do this once to work on any of Facebook's open source projects.
+
+In order to accept your pull request, we need you to submit a CLA. You
+only need to do this once, so if you've done this for another Facebook
+open source project, you're good to go. If you are submitting a pull
+request for the first time, just let us know that you have completed
+the CLA and we can cross-check with your GitHub username.
 
 Complete your CLA here: <https://code.facebook.com/cla>
 
-## Issues
-We use GitHub issues to track public bugs. Please ensure your description is
-clear and has sufficient instructions to be able to reproduce the issue.
-
-Facebook has a [bounty program](https://www.facebook.com/whitehat/) for the safe
-disclosure of security bugs. In those cases, please go through the process
-outlined on that page and do not file a public issue.
+If you prefer to sign a paper copy, we can send you a PDF.  Send us an
+e-mail or create a new github issue to request the CLA in PDF format.
 
 ## Coding Style
 * 2 spaces for indentation rather than tabs
 * 80 character line length
 
 ## License
-By contributing to ocpjbod, you agree that your contributions will be licensed
-under its BSD license.
+By contributing to ocpjbod, you agree that your contributions will be
+licensed under the [BSD License](LICENSE).
