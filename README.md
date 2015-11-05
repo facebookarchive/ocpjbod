@@ -19,7 +19,7 @@ ocpjbod requires or works with
 
 2. Run in ocpjbod directory:
 
-    make
+    make all
 
 ## Installing ocpjbod
 After successful make, run in ocpjbod directory:
