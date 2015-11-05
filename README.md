@@ -5,6 +5,7 @@ Honey Badger, etc. Details about these hardware are available at
 http://www.opencompute.org/wiki/Storage.
 
 ocpjbod is made to be extendible, we welcome external contributions.
+
 Discussions are conducted in https://www.facebook.com/groups/ocpjbod.
 
 ## Requirements
@@ -19,8 +20,6 @@ ocpjbod requires or works with
 2. Run in ocpjbod directory:
 
     make
-
-ocpjbod.spec file is also provide to make rpm package.
 
 ## Installing ocpjbod
 After successful make, run in ocpjbod directory:
