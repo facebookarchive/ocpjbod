@@ -13,7 +13,8 @@ void print_sas_addr_a(unsigned char *sas_addr, char *sas_addr_str)
 {
   int i;
   for (i = 0; i < SAS_ADDR_LENGTH; i ++) {
-    snprintf(sas_addr_str + 2 * i, SAS_ADDR_STR_LENGTH, "%02x", sas_addr[i]);
+    snprintf(sas_addr_str + 2 * i, SAS_ADDR_STR_LENGTH - 2 * i,
+             "%02x", sas_addr[i]);
   }
 }
 

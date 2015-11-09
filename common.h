@@ -16,7 +16,7 @@
 #define OCP_SLOT_PER_ENCLOSURE 15
 
 #define SAS_ADDR_LENGTH         8
-#define SAS_ADDR_STR_LENGTH     (SAS_ADDR_LENGTH * 2 + 1)
+#define SAS_ADDR_STR_LENGTH     (SAS_ADDR_LENGTH * 2)
 #define MAX_PN_LENGTH           16
 #define MAX_SN_LENGTH           16
 #define MAX_TAG_LENGTH          16
@@ -26,7 +26,7 @@
 
 
 #define SAS_ADDR(name) unsigned char name[SAS_ADDR_LENGTH]
-#define SAS_ADDR_STR(name)  char name[SAS_ADDR_STR_LENGTH];
+#define SAS_ADDR_STR(name)  char name[SAS_ADDR_STR_LENGTH + 1];
 
 #define PRODUCT_NUMBER(name) char name[MAX_PN_LENGTH]
 #define SERIAL_NUMBER(name) char name[MAX_SN_LENGTH]
