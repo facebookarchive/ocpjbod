@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "common.h"
 #include "scsi_buffer.h"
 #include "json.h"
 
@@ -44,51 +45,53 @@ void read_buffer_string(int sg_fd, struct scsi_buffer_parameter *sbp,
   scsi_read_buffer(sg_fd, sbp->buf_id, sbp->buf_offset,
                    (unsigned char *) buf, read_length);
   buf[read_length] = '\0';
+  fix_none_ascii(buf, read_length);
+}
+
+void read_value_as_string(
+    int sg_fd, struct scsi_buffer_parameter *sbp, char out[4096])
+{
+  unsigned char buf[4096];
+  char *str, *esc_str;
+
+  scsi_read_buffer(sg_fd, sbp->buf_id, sbp->buf_offset, buf, sbp->len);
+
+  switch (sbp->type) {
+    case sbp_integer:
+      snprintf(
+        out, 4096, "%d %s",
+        sbp->to_int_callback(buf + sbp->value_offset), sbp->unit);
+      break;
+    case sbp_floatp:
+      snprintf(
+        out, 4096, "%.2f %s",
+        sbp->to_float_callback(buf + sbp->value_offset), sbp->unit);
+      break;
+    case sbp_string:
+      str = sbp->to_string_callback(
+          buf + sbp->value_offset,
+          sbp->len - sbp->value_offset);
+      esc_str = str_escape(str);
+      snprintf(
+        out, 4096, "%s%s",
+        str,
+        sbp->unit);
+      free(str);
+      free(esc_str);
+      break;
+  }
 }
 
 void print_read_value(int sg_fd, struct scsi_buffer_parameter *sbp)
 {
-  unsigned char buf[4096];
-
-  scsi_read_buffer(sg_fd, sbp->buf_id, sbp->buf_offset, buf, sbp->len);
+  char out[4096];
+  read_value_as_string(sg_fd, sbp, out);
 
   IF_PRINT_NONE_JSON {
-    switch (sbp->type) {
-      case integer:
-        printf("%s\t%d %s\n", sbp->name,
-               sbp->to_int_callback(buf + sbp->value_offset), sbp->unit);
-        break;
-      case floatp:
-        printf("%s\t%.2f %s\n", sbp->name,
-               sbp->to_float_callback(buf + sbp->value_offset), sbp->unit);
-        break;
-      case string:
-        printf("%s\t%s %s\n", sbp->name,
-               sbp->to_string_callback(buf + sbp->value_offset,
-                                       sbp->len - sbp->value_offset),
-               sbp->unit);
-        break;
-    }
+    printf("%s\t%s\n", sbp->name, out);
   }
-  switch (sbp->type) {
-    case integer:
-      PRINT_JSON_LAST_ITEM_UNIT(sbp->name, "%d ",
-                                sbp->to_int_callback(buf + sbp->value_offset),
-                                sbp->unit);
-      break;
-    case floatp:
-      PRINT_JSON_LAST_ITEM_UNIT(sbp->name, "%.2f ",
-                                sbp->to_float_callback(buf + sbp->value_offset),
-                                sbp->unit);
-      break;
-    case string:
-      PRINT_JSON_LAST_ITEM_UNIT(sbp->name, "%s",
-                                sbp->to_string_callback(
-                                  buf + sbp->value_offset,
-                                  sbp->len - sbp->value_offset),
-                                sbp->unit);
-      break;
-  }
+  PRINT_JSON_LAST_ITEM(
+    sbp->name, "%s", out);
 }
 
 int two_byte_to_int(unsigned char *buf)
@@ -102,11 +105,24 @@ int four_byte_to_int(unsigned char *buf)
     (int)buf[2] * 256 + (int)buf[3];
 }
 
+unsigned int four_byte_to_uint(unsigned char *buf)
+{
+  return (unsigned int)buf[0] * 256 * 256 * 256 +
+    (unsigned int)buf[1] * 256 * 256 +
+    (unsigned int)buf[2] * 256 + (unsigned int)buf[3];
+}
+
 char *buf_to_string(unsigned char *buf, int len)
 {
   char *ret;
+
   ret = (char *) malloc(len + 1);
+  if (!ret) {
+    return ret;
+  }
   memcpy(ret, buf, len);
   ret[len] = '\0';
+
+  fix_none_ascii(ret, len);
   return ret;
 }

@@ -8,17 +8,17 @@ ifndef NAME
 	NAME = ocpjbod
 endif
 
-CFLAGS = -O2 -DNAME=\"$(NAME)\"
+CFLAGS = -std=gnu99 -O2 -DNAME=\"$(NAME)\"
 
 ifdef UTIL_VERSION
 CFLAGS += -DUTIL_VERSION=\"$(UTIL_VERSION)\"
 endif
 
-LDFLAGS = -lsgutils2
+LDFLAGS = -lsgutils2 -lcurl -ljson-c -lswitchtec
 
 BIN = $(NAME)
 
-OBJS = array_device_slot.o  common.o  cooling.o  enclosure_info.o  expander.o  ocpjbod.o  jbod_interface.o  options.o  scsi_buffer.o  sensors.o  ses.o  led.o json.o drive_control.o knox.o
+OBJS = array_device_slot.o  common.o  cooling.o  enclosure_info.o  expander.o  ocpjbod.o  jbod_interface.o  options.o  scsi_buffer.o  sensors.o  ses.o  led.o json.o drive_control.o jbof_interface.o
 
 BINDIR=/usr/bin
 
@@ -30,7 +30,7 @@ BINDIR=/usr/bin
 .SUFFIXES : .c .o
 
 .c.o :
-	$(CC) -c $(CFLAGS) $(CFLAGS) $<
+	$(CC) -c $(CFLAGS) $<
 
 $(BIN) : $(OBJS)
 	$(CC) $(LDFLAGS) -o $(BIN) $(OBJS)

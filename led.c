@@ -27,7 +27,7 @@ void print_led(int id, struct led_info *info)
         snprintf(val, 64, "Off");
         break;
       case SINGLE_LED_ON:
-        snprintf(val, 64, info->color_one);
+        snprintf(val, 64, "%s", info->color_one);
         break;
       case SINGLE_LED_BLINK:
         snprintf(val, 64, "Blink %s", info->color_one);
@@ -41,7 +41,7 @@ void print_led(int id, struct led_info *info)
         snprintf(val, 64, "Off");
         break;
       case DUO_LED_COLOR_ONE_ON:
-        snprintf(val, 64, info->color_one);
+        snprintf(val, 64, "%s", info->color_one);
         break;
       case DUO_LED_COLOR_ONE_BLINK:
         snprintf(val, 64, "Blink %s", info->color_one);

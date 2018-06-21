@@ -12,7 +12,6 @@
 #include "json.h"
 #include "ses.h"
 #include <dirent.h>
-#include <limits.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -20,24 +19,30 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+const char* status_str(struct array_device_slot slot) {
+  if ((slot.common_status & 0xf) == 0x5) {
+    return "Not Installed";
+  } else if (slot.device_off) {
+    return "Power Off";
+  } else {
+    return "Power On";
+  }
+}
+
+const char *fault_led_status_str(int fault_code) {
+  const char *fault_led_status[] = {"None", "Requested", "Sensed", "Sensed"};
+  return fault_led_status[fault_code];
+}
+
 void print_array_device_slot(struct array_device_slot *slot)
 {
-  char *fault_led_status[] = {"None", "Requested", "Sensed", "Sensed"};
-  char *device_status_str = NULL;
-
-  if ((slot->common_status & 0xf) == 0x5) {
-    device_status_str = "Not Installed";
-  } else if (slot->device_off) {
-    device_status_str = "Power Off";
-  } else {
-    device_status_str = "Power On";
-  }
+  const char *device_status_str = status_str(*slot);
 
   IF_PRINT_NONE_JSON {
     printf("%s Slot:\t%d\tPhy: %d\t%s\tSAS Addr: 0x%s\t"
            "Fault: %s",
            slot->name, slot->slot, slot->phy, device_status_str,
-           slot->sas_addr_str, fault_led_status[slot->fault]);
+           slot->sas_addr_str, fault_led_status_str(slot->fault));
     if (slot->dev_name) {
       printf("\t%s", slot->dev_name);
       printf("\t%s", slot->by_slot_name);
@@ -52,11 +57,11 @@ void print_array_device_slot(struct array_device_slot *slot)
   PRINT_JSON_ITEM("status", "%s", device_status_str);
   PRINT_JSON_ITEM("sas_addr", "0x%s", slot->sas_addr_str);
   if (slot->dev_name) {
-    PRINT_JSON_ITEM("fault", "%s", fault_led_status[slot->fault]);
+    PRINT_JSON_ITEM("fault", "%s", fault_led_status_str(slot->fault));
     PRINT_JSON_ITEM("devname", "%s", slot->dev_name);
     PRINT_JSON_LAST_ITEM("by_slot_name", "%s", slot->by_slot_name);
   } else
-    PRINT_JSON_LAST_ITEM("fault", "%s", fault_led_status[slot->fault]);
+    PRINT_JSON_LAST_ITEM("fault", "%s", fault_led_status_str(slot->fault));
 
   PRINT_JSON_GROUP_ENDING;
 }
@@ -104,6 +109,15 @@ int control_hdd_power(
     page_two[slot->page_two_offset + 3] |= 0x10;
   }
   return 0;
+}
+
+/* return whether the HDD is powered on */
+int check_hdd_power(
+  unsigned char *page_two,
+  struct array_device_slot *slot)
+{
+  /* this bit is DEVICE_OFF, so we need to reverse it */
+  return !(page_two[slot->page_two_offset + 3] & 0x10);
 }
 
 int control_hdd_led_fault(

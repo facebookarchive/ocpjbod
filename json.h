@@ -9,8 +9,14 @@
 
 #ifndef JSON_H
 #define JSON_H
-#include "options.h"
 
+#include <stdlib.h>
+#include <stdio.h>
+
+/*
+ * Don't forget to call free().
+ */
+char* str_escape(const char* src);
 
 #define IF_PRINT_JSON if (print_json)
 
@@ -39,6 +45,7 @@
 #define PRINT_JSON_MORE_GROUP IF_PRINT_JSON printf(",\n")
 
 extern int do_new_item;
+extern int print_json;
 
 #define PRINT_JSON_GROUP_SEPARATE if (do_new_item) PRINT_JSON_MORE_GROUP ; \
   do_new_item = 1

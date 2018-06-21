@@ -55,7 +55,7 @@
 
 #define MAX_ELEMENT_TYPE_COUNT 32
 #define MAX_COUNT_PER_ELEMENT 64
-#define MAX_SES_PAGE_SIZE 4096
+#define MAX_SES_PAGE_SIZE 8192
 #define MAX_SES_PAGE_ID 16
 
 #define ELEMENT_STATUS_UNSUPPORTED       0x0
@@ -108,10 +108,10 @@ extern int interpret_ses_pages(
   struct ses_pages *pages,
   struct ses_status_info *ses_info);
 
-extern void read_ses_pages(int sg_fd, struct ses_pages *pages,
+extern int read_ses_pages(int sg_fd, struct ses_pages *pages,
                            int *page_two_size);
 
-/* read ses page and provide return number of byte read in count */
+/* read ses page; return errno and provide number of bytes read in count */
 extern int sg_read_ses_page(int sg_fd, int page_code, unsigned char *buf,
                             int buf_size, int *count);
 

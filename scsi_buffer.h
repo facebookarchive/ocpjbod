@@ -21,7 +21,7 @@ extern int scsi_write_buffer(
   unsigned char *msg, int msg_size);
 
 /* directions to interpret buffer parameter */
-typedef enum {integer, floatp, string} value_type;
+typedef enum {sbp_integer, sbp_floatp, sbp_string} value_type;
 
 struct scsi_buffer_parameter {
   value_type type;
@@ -32,8 +32,8 @@ struct scsi_buffer_parameter {
   int len;
 
   /* paremeter name and unit */
-  char *name;
-  char *unit;
+  const char *name;
+  const char *unit;
 
   /* offset of the value in the read data */
   int value_offset;
@@ -44,13 +44,20 @@ struct scsi_buffer_parameter {
   char *(*to_string_callback) (unsigned char *buf, int len);
 };
 
+extern void read_value_as_string(
+    int sg_fd, struct scsi_buffer_parameter *sbp, char out[4096]);
+
 /* read the value and print it */
 extern void print_read_value(int sg_fd, struct scsi_buffer_parameter *sbp);
 
 /* two byte to a integer*/
 extern int two_byte_to_int(unsigned char *buf);
+
+/* four byte to a integer*/
 extern int four_byte_to_int(unsigned char *buf);
 
+/* four byte to a unsigned integer*/
+extern unsigned int four_byte_to_uint(unsigned char *buf);
 /* copy data from buffer to a string */
 extern char *buf_to_string(unsigned char *buf, int len);
 

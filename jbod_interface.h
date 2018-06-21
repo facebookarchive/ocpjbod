@@ -18,23 +18,40 @@
 #define INQUIRY_PRODUCT_LEN 16
 #define INQUIRY_REVISION_LEN 4
 #define INQUIRY_SPECIFIC_LEN 20
+#define TYPE_NAME_MAX 20
 
+/*
+A JBOD type, eg knox, honeybadger
+*/
 struct jbod_profile  {
   char vendor[INQUIRY_VENDOR_LEN + 1];
   char product[INQUIRY_PRODUCT_LEN + 1];
   char revision[INQUIRY_REVISION_LEN + 1];
   char specific[INQUIRY_SPECIFIC_LEN + 1];
   struct jbod_interface *interface;
-  char *name;
+  char name[TYPE_NAME_MAX];
 };
 
+/*
+A JBOD's serial numbers
+*/
 struct jbod_short_profile {
   char node_sn[MAX_TAG_LENGTH];
   char fb_asset_node[MAX_TAG_LENGTH];
   char fb_asset_chassis[MAX_TAG_LENGTH];
 };
 
-struct jbod_interface {
+/*
+A device (either sg or bsg)
+*/
+struct jbod_device {
+  char profile_name[TYPE_NAME_MAX]; /* same as jbod_profile.name */
+  char sg_device[PATH_MAX];
+  char bsg_device[PATH_MAX];
+  struct jbod_short_profile short_profile;
+};
+
+typedef struct jbod_interface {
   /* enclosure info */
   void (*print_enclosure_info) (int sg_fd);
 
@@ -92,31 +109,33 @@ struct jbod_interface {
   void (*print_profile) (struct jbod_profile *profile);
 
   struct jbod_short_profile (*get_short_profile) (char *devname);
-};
+
+  void (*print_pwm)(int sg_fd);
+  void (*print_cfm)(int sg_fd);
+} jbod_interface_t;
 
 extern struct jbod_interface knox;
 extern struct jbod_interface honeybadger;
+extern struct jbod_interface triton;
 
 /* all supported JBODs: knox, honeybadger, etc. */
 extern struct jbod_profile jbod_library[];
 extern int library_size;
 
-/* SES information */
-extern struct ses_pages *pages;
-extern struct ses_status_info *ses_info;
-
 /* check device and figure out which jbod_interface it is */
-extern struct jbod_interface *detect_dev(char *devname);
+extern struct jbod_interface *detect_dev(const char *devname);
 
 /* extrace the jbod_profile from device name */
-extern struct jbod_profile *extract_profile(char *devname);
+extern struct jbod_profile *extract_profile(const char *devname);
 
 /* list all supported JBODs */
-extern int list_jbod(char jbod_names[MAX_JBOD_PER_HOST][PATH_MAX],
-                     int show_detail, int quiet);
+extern int lib_list_jbod(struct jbod_device[MAX_JBOD_PER_HOST]);
+
+extern void print_list_of_jbod(struct jbod_device[MAX_JBOD_PER_HOST], int, int);
 
 /* fetch SES pages and extract information */
-extern int fetch_ses_status(int sg_fd);
+struct ses_status_info;
+extern int fetch_ses_status(int sg_fd, struct ses_status_info *ses_info);
 
 /* default functions for different JBODs */
 
@@ -128,8 +147,14 @@ extern void jbod_print_current_reading(int sg_fd, int print_thresholds);
 /* no default function for power reading */
 
 extern void jbod_print_hdd_info (int sg_fd);
-extern int jbod_hdd_power_control (int sg_fd, int slot_id, int op, int timeout, int cold_storage);
+extern int jbod_hdd_power_control (int sg_fd, int slot_id, int op, int timeout,
+  int cold_storage);
 extern int jbod_hdd_led_control (int sg_fd, int slot_id, int op);
+
+extern int jbod_hdd_power_on_with_timeout(int sg_fd, int slot_id, int timeout,
+  int cold_storage);
+extern int jbod_hdd_power_off_with_timeout(int sg_fd, int slot_id, int timeout,
+  int cold_storage);
 
 extern void jbod_print_all_sensor_reading(int sg_fd, int print_thresholds);
 
@@ -166,6 +191,8 @@ struct config_item {
   int buffer_id;
   int buffer_offset;
   char *name;
+  void (*show_func)(int sg_fd, struct config_item *config);
+  void (*change_func)(int sg_fd, int val, struct config_item *config);
 };
 
 extern struct config_item all_configs[3];

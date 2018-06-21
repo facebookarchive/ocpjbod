@@ -7,12 +7,11 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <assert.h>
 #include <scsi/sg_lib.h>
 #include <scsi/sg_cmds.h>
-#include <linux/types.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "jbod_interface.h"
 #include "scsi_buffer.h"
@@ -21,49 +20,7 @@
 #include "cooling.h"
 #include "json.h"
 
-static struct scsi_buffer_parameter power = {
-  integer, 0x41, 0, 4, "Power", "W", 2, two_byte_to_int, NULL, NULL};
-
-static struct scsi_buffer_parameter seb_pn = {
-  string, 0x20, 0, 11, "SEB_PN", "", 0, NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter seb_sn = {
-  string, 0x20, 0x100, 11, "SEB_SN", "", 0, NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter dpb_pn = {
-  string, 0x30, 0, 11, "DPB_PN", "", 0, NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter dpb_sn = {
-  string, 0x30, 0x100, 11, "DPB_SN", "", 0, NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter tray_pn = {
-  string, 0x30, 0x200, 11, "Tray_PN", "", 0, NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter tray_sn = {
-  string, 0x30, 0x300, 12, "Tray_SN", "", 0, NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter node_pn = {
-  string, 0x30, 0x200, 11, "Node_PN", "", 0, NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter node_sn = {
-  string, 0x30, 0x300, 12, "Node_SN", "", 0, NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter fcb_pn = {
-  string, 0x40, 0, 11, "FCB_PN", "", 0, NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter fcb_sn = {
-  string, 0x40, 0x100, 11, "FCB_SN", "", 0, NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter tray_asset = {
-  string, 0x30, 0x500, 7, "FB_Asset_Node", "", 0,
-  NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter chassis_tag = {
-  string, 0x40, 0x500, 7, "FB_Asset_Chassis", "", 0,
-  NULL, NULL, buf_to_string};
-
-static struct scsi_buffer_parameter rack_pos = {
-  string, 0x40, 0x600, 2, "Rack_Position", "", 0, NULL, NULL, buf_to_string};
+#include "knox.h"
 
 void knox_print_power_reading(int sg_fd)
 {
@@ -75,8 +32,8 @@ void knox_print_enclosure_info (int sg_fd)
   jbod_print_enclosure_info(sg_fd);
   print_read_value(sg_fd, &seb_pn); PRINT_JSON_MORE_ITEM;
   print_read_value(sg_fd, &seb_sn); PRINT_JSON_MORE_ITEM;
-  print_read_value(sg_fd, &dpb_pn); PRINT_JSON_MORE_ITEM;
-  print_read_value(sg_fd, &dpb_sn); PRINT_JSON_MORE_ITEM;
+  print_read_value(sg_fd, &knox_dpb_pn); PRINT_JSON_MORE_ITEM;
+  print_read_value(sg_fd, &knox_dpb_sn); PRINT_JSON_MORE_ITEM;
   print_read_value(sg_fd, &fcb_pn); PRINT_JSON_MORE_ITEM;
   print_read_value(sg_fd, &fcb_sn); PRINT_JSON_MORE_ITEM;
   print_read_value(sg_fd, &tray_sn); PRINT_JSON_MORE_ITEM;
@@ -88,8 +45,8 @@ void knox_print_enclosure_info (int sg_fd)
 
 struct scsi_buffer_parameter *knox_asset_tag_list[] =
 {&tray_asset, &chassis_tag,
- &seb_pn, &seb_sn, &dpb_pn, &dpb_sn, &fcb_pn, &fcb_sn, &tray_pn, &tray_sn,
- &node_pn, &node_sn, &rack_pos};
+ &seb_pn, &seb_sn, &knox_dpb_pn, &knox_dpb_sn, &fcb_pn, &fcb_sn, &tray_pn,
+ &tray_sn, &node_pn, &node_sn, &rack_pos};
 
 void knox_config_asset_tags()
 {
@@ -211,7 +168,7 @@ void knox_print_event_log(int sg_fd)
   unsigned char buf[EVENT_LOG_BUFFER_SIZE];
   unsigned char *buf_ptr;
   int64_t timestamp = 0;
-  int i, j;
+  int i;
   char id_str[16];
 
   perr("NOTE: Event log in Knox is not complete at this time...\n");
@@ -235,6 +192,7 @@ void knox_print_event_log(int sg_fd)
     PRINT_JSON_GROUP_HEADER(id_str);
     PRINT_JSON_ITEM("timestamp", "%ld", timestamp);
     PRINT_JSON_ITEM("id", "%d", buf_ptr[13] * 256 + buf_ptr[12]);
+    fix_none_ascii((char *)(buf_ptr + 24), strlen((char *)(buf_ptr + 24)));
     PRINT_JSON_LAST_ITEM("description", "%s", (char *)(buf_ptr + 24));
     PRINT_JSON_GROUP_ENDING;
   }
@@ -478,10 +436,21 @@ struct led_info honeybadger_leds[] = {
 
 void honeybadger_print_sys_led(int sg_fd)
 {
-  jbod_led_buffer_length = HONEYBADGER_LED_BUFFER_LENGTH;
-  jbod_led_buffer_id = HONEYBADGER_LED_BUFFER_ID;
-  jbod_leds = honeybadger_leds;
-  jbod_print_sys_led(sg_fd);
+  int i;
+  unsigned char buf[HONEYBADGER_LED_BUFFER_LENGTH];
+
+  for (i = 0; i < HONEYBADGER_LED_BUFFER_LENGTH; ++i) {
+    scsi_read_buffer(sg_fd, HONEYBADGER_LED_BUFFER_ID, i, buf + i, 1);
+  }
+
+  IF_PRINT_NONE_JSON {
+    printf("%s\t%s\t%s\n", "ID", "Name", "Status");
+  }
+
+  for (i = 0; i < HONEYBADGER_LED_BUFFER_LENGTH; i ++) {
+    honeybadger_leds[i].status = buf[i];
+    print_led(i, honeybadger_leds + i);
+  }
 }
 
 void knox_control_sys_led(int sg_fd, int led_id, int value)
@@ -590,24 +559,24 @@ void knox_print_phyerr(int sg_fd)
     scsi_read_buffer(sg_fd, KNOX_PHYERR_BUFFER_ID, i,
                      buf, KNOX_PHYERR_BUFFER_LENGTH);
     IF_PRINT_NONE_JSON
-      printf("%d\t%d\t%d\t%d\t%d\n",
+      printf("%d\t%u\t%u\t%u\t%u\n",
              i,
-             four_byte_to_int(buf + 0),
-             four_byte_to_int(buf + 4),
-             four_byte_to_int(buf + 8),
-             four_byte_to_int(buf + 12)
+             four_byte_to_uint(buf + 0),
+             four_byte_to_uint(buf + 4),
+             four_byte_to_uint(buf + 8),
+             four_byte_to_uint(buf + 12)
             );
     if (i) PRINT_JSON_MORE_GROUP;
-    snprintf(json_key, 16, "Phy_%d", i);
+    snprintf(json_key, 16, "Phy_%u", i);
     PRINT_JSON_GROUP_HEADER(json_key);
-    PRINT_JSON_ITEM("Invalid Dword", "%d",
-                    four_byte_to_int(buf + 0));
-    PRINT_JSON_ITEM("Running Disparity", "%d",
-                    four_byte_to_int(buf + 4));
-    PRINT_JSON_ITEM("Loss of Dword Sync", "%d",
-                    four_byte_to_int(buf + 8));
-    PRINT_JSON_LAST_ITEM("Phy Reset Problem", "%d",
-                         four_byte_to_int(buf + 12));
+    PRINT_JSON_ITEM("Invalid Dword", "%u",
+                    four_byte_to_uint(buf + 0));
+    PRINT_JSON_ITEM("Running Disparity", "%u",
+                    four_byte_to_uint(buf + 4));
+    PRINT_JSON_ITEM("Loss of Dword Sync", "%u",
+                    four_byte_to_uint(buf + 8));
+    PRINT_JSON_LAST_ITEM("Phy Reset Problem", "%u",
+                         four_byte_to_uint(buf + 12));
     PRINT_JSON_GROUP_ENDING;
   }
 }
@@ -621,8 +590,6 @@ void honeybadger_print_phyerr(int sg_fd)
 void knox_reset_phyerr(int sg_fd)
 {
   unsigned char buf[16] = {0};
-  int i;
-  char json_key[16];
 
   scsi_write_buffer(sg_fd, KNOX_PHYERR_BUFFER_ID, 0, buf, 16);
 }

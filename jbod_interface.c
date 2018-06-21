@@ -7,42 +7,51 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  */
 
-#include <dirent.h>
-#include <limits.h>
+#include <sys/types.h>
+#include <sys/ioctl.h>
 #include <scsi/sg.h>
 #include <scsi/sg_lib.h>
 #include <scsi/sg_cmds.h>
-#include <sys/ioctl.h>
+#include <assert.h>
+#include <dirent.h>
+#include <errno.h>
+#include <limits.h>
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
 #include <time.h>
+#include <unistd.h>
+#include <libgen.h>
 
 #include "jbod_interface.h"
 #include "scsi_buffer.h"
 #include "ses.h"
 #include "led.h"
-#include "options.h"
 #include "json.h"
 #include "drive_control.h"
 
-#define SCSI_BUFFER_MAX_SIZE 64
+#include "knox.c"
+#include "triton.c"
 
-struct ses_pages *pages = NULL;
-struct ses_status_info *ses_info = NULL;
+#define SCSI_BUFFER_MAX_SIZE 64
 
 struct jbod_profile jbod_library[] = {
   {"facebook", "Knox2U          ", "0e20", "", &knox, "Knox"},
   {"wiwynn  ", "HB2U            ", "0408", "", &honeybadger, "HoneyBadger"},
+  {"wiwynn  ", "TN4U            ", "", "", &triton, "BryceCanyon"},
+  {"wiwynn  ", "BC4U            ", "", "", &triton, "BryceCanyon"},
 };
 
 int library_size = sizeof(jbod_library) / sizeof(struct jbod_profile);
 
-static int inquiry_would_block(int sg_fd, char *devname) {
+static int inquiry_would_block(int sg_fd, const char *devname) {
   int accessibility_res = -1;
   int command = SG_SCSI_RESET_NOTHING;
   int count = 0;
+
+  /* bsg device does not support SG_SCSI_RESET,
+     so we only do SG_SCSI_RESET_NOTHING check for sg device */
+  if (strstr(devname, "/dev/sg") == NULL)
+    return 0;
 
   for (count = 0; count < 10; ++count) {
     accessibility_res = ioctl(sg_fd, SG_SCSI_RESET, &command);
@@ -61,17 +70,15 @@ static int inquiry_would_block(int sg_fd, char *devname) {
   return 1;
 }
 
-struct jbod_profile *extract_profile(char *devname)
+struct jbod_profile *extract_profile(const char *devname)
 {
+  struct jbod_profile *profile;
   char buff[INQUIRY_RESP_INITIAL_LEN];
   int sg_fd;
-  int i, j;
-  struct jbod_profile *profile =
-    (struct jbod_profile *) malloc(sizeof(struct jbod_profile));
 
-  memset(profile, 0, sizeof(struct jbod_profile));
+  profile = NULL;
+
   sg_fd = sg_cmds_open_device(devname, 0 /* rw */, 0 /* not verbose */);
-
   if (sg_fd < 0) {
 #ifdef DEBUG
     perr("Cannot open %s.\n", devname);
@@ -80,16 +87,19 @@ struct jbod_profile *extract_profile(char *devname)
   }
 
   if (inquiry_would_block(sg_fd, devname)) {
-    sg_cmds_close_device(sg_fd);
-    return NULL;
+    goto done;
   }
 
-  if (sg_ll_inquiry(sg_fd, 0, 0, 0, buff, sizeof(buff), 1, 0)) {
+  if (sg_ll_inquiry(sg_fd, 0, 0, 0, buff, sizeof(buff), 0, 0)) {
 #ifdef DEBUG
     perr("Cannot inquiry %s.\n", devname);
 #endif
-    sg_cmds_close_device(sg_fd);
-    return NULL;
+    goto done;
+  }
+
+  profile = (struct jbod_profile *)calloc(1, sizeof(struct jbod_profile));
+  if (profile == NULL) {
+    goto done;
   }
 
   memcpy(profile->vendor, &buff[8], INQUIRY_VENDOR_LEN);
@@ -97,68 +107,34 @@ struct jbod_profile *extract_profile(char *devname)
   memcpy(profile->revision, &buff[32], INQUIRY_REVISION_LEN);
   memcpy(profile->specific, &buff[36], INQUIRY_SPECIFIC_LEN);
 
-  if(profile->specific[0] < 0x20)
+  if (profile->specific[0] < 0x20) {
     profile->specific[0] = '\0';
+  }
 
+done:
   sg_cmds_close_device(sg_fd);
   return profile;
 }
 
-struct jbod_interface *detect_dev(char *devname)
+struct jbod_interface *detect_dev(const char *devname)
 {
-  char vendor[INQUIRY_VENDOR_LEN + 1] = {0};
-  char product[INQUIRY_PRODUCT_LEN + 1] = {0};;
-  char revision[INQUIRY_REVISION_LEN + 1] = {0};;
-  char specific[INQUIRY_SPECIFIC_LEN + 1] = {0};
+  struct jbod_profile *profile;
+  int i;
 
-  char buff[INQUIRY_RESP_INITIAL_LEN];
-  int sg_fd;
-  int i, j;
-
-  sg_fd = sg_cmds_open_device(devname, 0 /* rw */, 0 /* not verbose */);
-
-  if (sg_fd < 0) {
-#ifdef DEBUG
-    perr("Cannot open %s.\n", devname);
-#endif
+  profile = extract_profile(devname);
+  if (profile == NULL) {
     return NULL;
   }
-
-  if (inquiry_would_block(sg_fd, devname)) {
-    sg_cmds_close_device(sg_fd);
-    return NULL;
-  }
-
-  if (sg_ll_inquiry(sg_fd, 0, 0, 0, buff, sizeof(buff), 1, 0)) {
-#ifdef DEBUG
-    perr("Cannot inquiry %s.\n", devname);
-#endif
-    sg_cmds_close_device(sg_fd);
-    return NULL;
-  }
-
-  memcpy(vendor, &buff[8], INQUIRY_VENDOR_LEN);
-  memcpy(product, &buff[16], INQUIRY_PRODUCT_LEN);
-  memcpy(revision, &buff[32], INQUIRY_REVISION_LEN);
-  memcpy(specific, &buff[36], INQUIRY_SPECIFIC_LEN);
-
-  struct jbod_profile *profile = extract_profile(devname);
-
-  if (!profile)
-    return NULL;
 
   for (i = 0; i < library_size; i ++) {
-    if (strcmp(profile->vendor, jbod_library[i].vendor) == 0)
-/*
-  TODO: only check vendor for now, fix this later
-  if (strcmp(profile->product, jbod_library[i].product) == 0)
-  if (strcmp(profile->revision, jbod_library[i].revision) == 0)
-*/
+    if (strcmp(profile->vendor, jbod_library[i].vendor) == 0 &&
+        strcmp(profile->product, jbod_library[i].product) == 0)
     {
       free(profile);
       return jbod_library[i].interface;
     }
   }
+
   free(profile);
   return NULL;
 }
@@ -182,6 +158,12 @@ static int find_bsg_device(const char *sg_d_name, char *bsg_path)
   const int bsg_folder_count = 2;
   int i;
 
+  if (strncmp("sg", sg_d_name, 2) != 0) {
+    /* already the bsg device, just return the full path */
+    snprintf(bsg_path, PATH_MAX, "/dev/bsg/%s", sg_d_name);
+    return 1;
+  }
+
   snprintf(tmp_path, PATH_MAX,
            "/sys/class/scsi_generic/%s/device/bsg", sg_d_name);
 
@@ -204,8 +186,61 @@ static int find_bsg_device(const char *sg_d_name, char *bsg_path)
   return 0;
 }
 
-int list_jbod(char jbod_names[MAX_JBOD_PER_HOST][PATH_MAX],
-              int show_detail, int quiet)
+void print_list_of_jbod(struct jbod_device jbod_devices[MAX_JBOD_PER_HOST], int count, int show_detail) {
+  int i;
+  struct jbod_device d;
+
+  char *header_string = show_detail ?
+    "sg_device\tbsg_device   \tname\t"
+    "Node_SN\tFB_Asset_Node\tFB_Asset_Chassis \n"
+    :
+    "sg_device\tbsg_device   \tname\n";
+
+  IF_PRINT_NONE_JSON printf("%s", header_string);
+
+  for (i = 0; i < count; i++) {
+    d = jbod_devices[i];
+
+    IF_PRINT_NONE_JSON {
+      if (show_detail) {
+        printf(
+          "%s\t%s\t%s\t%s\t%s\t%s\n",
+          d.sg_device,
+          d.bsg_device,
+          d.profile_name,
+          d.short_profile.node_sn,
+          d.short_profile.fb_asset_node,
+          d.short_profile.fb_asset_chassis);
+      } else {
+        printf(
+          "%s\t%s\t%s\n",
+          d.sg_device,
+          d.bsg_device,
+          d.profile_name);
+      }
+    }
+    if (i != 0)
+      PRINT_JSON_MORE_GROUP;
+    PRINT_JSON_GROUP_HEADER(d.sg_device);
+    PRINT_JSON_ITEM("sg_device", "%s", d.sg_device);
+    PRINT_JSON_ITEM(
+      "bsg_device", "%s", d.bsg_device);
+
+    if (show_detail) {
+      PRINT_JSON_ITEM("name", "%s", d.profile_name);
+      PRINT_JSON_ITEM("Node_SN", "%s", d.short_profile.node_sn);
+      PRINT_JSON_ITEM("FB_Asset_Node", "%s", d.short_profile.fb_asset_node);
+      PRINT_JSON_LAST_ITEM("FB_Asset_Chassis", "%s",
+                           d.short_profile.fb_asset_chassis);
+    } else {
+      PRINT_JSON_LAST_ITEM("name", "%s", d.profile_name);
+    }
+
+    PRINT_JSON_GROUP_ENDING;
+  }
+}
+
+int lib_list_jbod(struct jbod_device out[MAX_JBOD_PER_HOST])
 {
   DIR *dir;
   struct dirent *ent;
@@ -214,139 +249,131 @@ int list_jbod(char jbod_names[MAX_JBOD_PER_HOST][PATH_MAX],
   char sg_path[PATH_MAX];
   char bsg_path[PATH_MAX];
   int jbod_count = 0;
-  int sg_fd = 0;
   struct jbod_short_profile short_p;
+#define DEVICE_PATH_COUNT 2
+  /* first search /dev/sgXX, then /dev/bsg/XX */
+  char *path_prefix[DEVICE_PATH_COUNT][2] =
+    {{"/dev/", "sg"}, {"/dev/bsg/", ""}};
+  int p;
 
-  char *header_string = show_detail ?
-    "sg_device\tbsg_device   \tname\t"
-    "Node_SN\tFB_Asset_Node\tFB_Asset_Chassis \n"
-    :
-    "sg_device\tbsg_device   \tname\n";
-
-  if (!quiet) IF_PRINT_NONE_JSON printf(header_string);
-  if ((dir = opendir ("/dev/")) != NULL) {
-    while ((ent = readdir (dir)) != NULL) {
-      if (strncmp("sg", ent->d_name, 2) == 0) {
-        snprintf(sg_path, PATH_MAX, "/dev/%s", ent->d_name);
+  for (p = 0; p < DEVICE_PATH_COUNT; ++p) {
+    if ((dir = opendir(path_prefix[p][0])) != NULL) {
+      while ((ent = readdir (dir)) != NULL) {
+        if (strncmp(path_prefix[p][1], ent->d_name, strlen(path_prefix[p][1]))
+            != 0)
+          continue;
+        snprintf(sg_path, PATH_MAX, "%s%s", path_prefix[p][0], ent->d_name);
 
         interface = detect_dev(sg_path);
         if (interface) {
-          if (jbod_names) {
-            memcpy(jbod_names[jbod_count], sg_path, strlen(sg_path) + 1);
-          }
-          jbod_count ++;
 
           index = jbod_interface_to_index(interface);
           short_p = interface->get_short_profile(sg_path);
-          if (!quiet)
-            IF_PRINT_NONE_JSON {
-              if (show_detail) {
-                printf("%s\t%s\t%s\t%s\t%s\t%s\n", sg_path,
-                       find_bsg_device(ent->d_name, bsg_path) ? bsg_path : "",
-                       jbod_library[index].name, short_p.node_sn,
-                       short_p.fb_asset_node, short_p.fb_asset_chassis);
 
-              } else {
-                printf("%s\t%s\t%s\n", sg_path,
-                       find_bsg_device(ent->d_name, bsg_path) ? bsg_path : "",
-                       jbod_library[index].name);
-              }
-            }
-          if (!quiet) {
-            if (jbod_count != 1)
-              PRINT_JSON_MORE_GROUP;
-            PRINT_JSON_GROUP_HEADER(sg_path);
-            PRINT_JSON_ITEM("sg_device", "%s", sg_path);
-            PRINT_JSON_ITEM(
-              "bsg_device", "%s",
-              find_bsg_device(ent->d_name, bsg_path) ? bsg_path : "");
-            if (show_detail) {
-              PRINT_JSON_ITEM("name", "%s", jbod_library[index].name);
-              PRINT_JSON_ITEM("Node_SN", "%s", short_p.node_sn);
-              PRINT_JSON_ITEM("FB_Asset_Node", "%s", short_p.fb_asset_node);
-              PRINT_JSON_LAST_ITEM("FB_Asset_Chassis", "%s",
-                              short_p.fb_asset_chassis);
-            } else {
-              PRINT_JSON_LAST_ITEM("name", "%s", jbod_library[index].name);
-            }
+          snprintf(out[jbod_count].sg_device, PATH_MAX, "%s", sg_path);
+          snprintf(out[jbod_count].bsg_device, PATH_MAX, "%s",
+            find_bsg_device(basename(sg_path), bsg_path) ? bsg_path : "");
+          snprintf(
+            out[jbod_count].profile_name, TYPE_NAME_MAX, "%s", jbod_library[index].name);
+          memcpy(
+            &out[jbod_count].short_profile,
+            &short_p,
+            sizeof(struct jbod_short_profile));
 
-            PRINT_JSON_GROUP_ENDING;
-          }
+          jbod_count ++;
         }
       }
+      closedir (dir);
+      if (jbod_count > 0)  /* found /dev/sgXXX, skip search in /dev/bsgXXX */
+        break;
     }
-    closedir (dir);
   }
   return jbod_count;
 }
 
-int fetch_ses_status(int sg_fd)
+int fetch_ses_status(int sg_fd, struct ses_status_info *ses_info)
 {
+  int rc = 0;
+  struct ses_pages *pages = NULL;
+  assert(ses_info != NULL);
+  memset(ses_info, 0, sizeof(*ses_info));
+
+  pages = (struct ses_pages *) calloc(1, sizeof(struct ses_pages));
+  assert(pages != NULL);
+
+  rc = read_ses_pages(sg_fd, pages, NULL);
+  if (0 == rc) {
+    interpret_ses_pages(pages, ses_info);
+  }
+
   if (pages) {
     free(pages);
     pages = NULL;
   }
-  if (ses_info) {
-    free(ses_info);
-    ses_info = NULL;
-  }
-  pages = (struct ses_pages *) malloc(sizeof(struct ses_pages));
-  ses_info = (struct ses_status_info *) malloc(sizeof(struct ses_status_info));
-  read_ses_pages(sg_fd, pages, NULL);
-  interpret_ses_pages(pages, ses_info);
-  return 0;
+
+  return rc;
 }
 
 void jbod_print_temperature_reading(int sg_fd, int print_thresholds)
 {
-  int i;
-  fetch_ses_status(sg_fd);
-  for (i = 0; i < ses_info->temp_count; i ++) {
-    PRINT_JSON_GROUP_SEPARATE;
-    print_temperature_sensor(ses_info->temp_sensors + i, print_thresholds);
+  int i, rc;
+  struct ses_status_info ses_info = {};
+
+  rc = fetch_ses_status(sg_fd, &ses_info);
+  if (0 == rc) {
+    for (i = 0; i < ses_info.temp_count; i++) {
+      PRINT_JSON_GROUP_SEPARATE;
+      print_temperature_sensor(ses_info.temp_sensors + i, print_thresholds);
+    }
   }
-  return;
 }
 
 void jbod_print_voltage_reading(int sg_fd, int print_thresholds) {
-  int i;
-  fetch_ses_status(sg_fd);
-  for (i = 0; i < ses_info->vol_count; i ++) {
-    PRINT_JSON_MORE_GROUP;
-    print_volatage_sensor(ses_info->vol_sensors + i, print_thresholds);
+  int i, rc;
+  struct ses_status_info ses_info = {};
+
+  rc = fetch_ses_status(sg_fd, &ses_info);
+  if (0 == rc) {
+    for (i = 0; i < ses_info.vol_count; i++) {
+      PRINT_JSON_MORE_GROUP;
+      print_volatage_sensor(ses_info.vol_sensors + i, print_thresholds);
+    }
   }
-  return;
 }
 
 void jbod_print_current_reading(int sg_fd, int print_thresholds)
 {
-  int i;
-  fetch_ses_status(sg_fd);
-  for (i = 0; i < ses_info->curr_count; i ++) {
-    PRINT_JSON_MORE_GROUP;
-    print_current_sensor(ses_info->curr_sensors + i, print_thresholds);
+  int i, rc;
+  struct ses_status_info ses_info = {};
+
+  rc = fetch_ses_status(sg_fd, &ses_info);
+  if (0 == rc) {
+    for (i = 0; i < ses_info.curr_count; i++) {
+      PRINT_JSON_MORE_GROUP;
+      print_current_sensor(ses_info.curr_sensors + i, print_thresholds);
+    }
   }
-  return;
 }
 
 void jbod_print_all_sensor_reading(int sg_fd, int print_thresholds)
 {
-  fetch_ses_status(sg_fd);
   jbod_print_temperature_reading(sg_fd, print_thresholds);
   jbod_print_voltage_reading(sg_fd, print_thresholds);
   jbod_print_current_reading(sg_fd, print_thresholds);
-  return;
 }
 
 void jbod_print_fan_info(int sg_fd)
 {
-  int i;
-  fetch_ses_status(sg_fd);
-  for (i = 0; i < ses_info->fan_count; i ++) {
-    PRINT_JSON_GROUP_SEPARATE;
-    print_cooling_fan(ses_info->fans + i);
+  struct ses_status_info ses_info = {};
+  int i, rc;
+
+  rc = fetch_ses_status(sg_fd, &ses_info);
+  if (0 == rc) {
+    for (i = 0; i < ses_info.fan_count; i++) {
+      PRINT_JSON_GROUP_SEPARATE;
+      print_cooling_fan(ses_info.fans + i);
+    }
   }
-  return;
 }
 
 int fan_pwm_buffer_id = -1;
@@ -371,38 +398,55 @@ void jbod_control_fan_pwm(int sg_fd, int pwm)
   }
   scsi_write_buffer(sg_fd, fan_pwm_buffer_id, fan_pwm_buffer_offset,
                     buf, write_len);
-  return;
 }
 
 void jbod_print_hdd_info (int sg_fd)
 {
-  int i;
-  fetch_ses_status(sg_fd);
-  for (i = 0; i < ses_info->slot_count; i ++) {
-    PRINT_JSON_GROUP_SEPARATE;
-    print_array_device_slot(ses_info->slots + i);
+  struct ses_status_info ses_info = {};
+  int i, rc;
+
+  rc = fetch_ses_status(sg_fd, &ses_info);
+  if (0 == rc) {
+    for (i = 0; i < ses_info.slot_count; i++) {
+      PRINT_JSON_GROUP_SEPARATE;
+      print_array_device_slot(ses_info.slots + i);
+    }
   }
-  return;
 }
 
 void jbod_print_enclosure_info (int sg_fd)
 {
-  fetch_ses_status(sg_fd);
-  IF_PRINT_NONE_JSON
-    printf("Expander SAS Addr\t0x%s\n", ses_info->expander.sas_addr_str);
+  int rc;
+  struct ses_status_info ses_info = {};
 
-  PRINT_JSON_ITEM("Expander SAS Addr", "0x%s",
-                  ses_info->expander.sas_addr_str);
+  rc = fetch_ses_status(sg_fd, &ses_info);
+  if (0 == rc) {
+    IF_PRINT_NONE_JSON
+    printf("Expander SAS Addr\t0x%s\n", ses_info.expander.sas_addr_str);
+
+    PRINT_JSON_ITEM(
+        "Expander SAS Addr", "0x%s", ses_info.expander.sas_addr_str);
+  }
 }
 
+/*
+ * if timeout < 0, does not do graceful shutdown
+ * if timeout == 0, does not wait for HDD disappear
+ * if timeout > 0, wait up to timeout seconds for HDD to disappear
+ */
 int jbod_hdd_power_off_with_timeout(int sg_fd, int slot_id, int timeout,
                                     int cold_storage)
 {
   struct ses_pages pages;
   struct ses_status_info ses_status;
   int page_two_size;
+  int rc;
 
-  read_ses_pages(sg_fd, &pages, &page_two_size);
+  rc = read_ses_pages(sg_fd, &pages, &page_two_size);
+  if (0 != rc) {
+    perr("Couldn't read ses pages: %d\n", rc);
+    return rc;
+  }
   interpret_ses_pages(&pages, &ses_status);
   if (slot_id < 0 || slot_id >= ses_status.slot_count) {
     perr("Slot_id %d is invalid\n", slot_id);
@@ -411,49 +455,61 @@ int jbod_hdd_power_off_with_timeout(int sg_fd, int slot_id, int timeout,
     return EINVAL;
   }
 
-  int sg_result = 0;
-
   /* clear link in /dev/disk/by-slot */
   if (ses_status.slots[slot_id].by_slot_name)
     unlink(ses_status.slots[slot_id].by_slot_name);
 
 
   /* gracefully shutdown the HDD */
-  remove_hdd(ses_status.slots[slot_id].dev_name,
-  ses_status.slots[slot_id].sas_addr_str);
+  if (timeout >= 0)
+    remove_hdd(ses_status.slots[slot_id].dev_name,
+               ses_status.slots[slot_id].sas_addr_str);
 
   /* pull HDD power in hardware */
   control_hdd_power(pages.page_two, ses_status.slots + slot_id, 0);
-  sg_result = sg_send_ses_page(sg_fd, pages.page_two, page_two_size);
-  if (timeout == 0) {
-    return sg_result;
+  rc = sg_send_ses_page(sg_fd, pages.page_two, page_two_size);
+  if (timeout <= 0 || 0 != rc) {
+    return rc;
   }
   int i = 0;
   for (i = 0; i < timeout; ++i) {
-    fetch_ses_status(sg_fd);
-    if (ses_info->slots[slot_id].dev_name == NULL) {
-      return sg_result;
+    rc = fetch_ses_status(sg_fd, &ses_status);
+    if ((0 == rc) && ses_status.slots[slot_id].dev_name == NULL) {
+      return rc;
     }
     sleep(1);
   }
-  if (ses_info->slots[slot_id].dev_name) {
-      perr("the device %s is still there\n",
-              ses_info->slots[slot_id].dev_name);
+  if (ses_status.slots[slot_id].dev_name) {
+    perr(
+        "the device %s is still there, errno: %d\n",
+        ses_status.slots[slot_id].dev_name,
+        rc);
     return 1;
   }
-  return sg_result;
+  return rc;
 }
 
+/*
+ * Power up a drive and wait for the powerup to succeed
+ *
+ * @returns 0 for success, EINVAL (22) for invalid slot id, -1 for timeout
+ * -2 for failures in power on HDD (hit X HDDs per expander limits in cold
+ * storage)
+ */
 int jbod_hdd_power_on_with_timeout(int sg_fd, int slot_id,
                                    int timeout, int cold_storage)
 {
   struct ses_pages pages;
   struct ses_status_info ses_status;
-  int page_two_size;
-  const int max_power_on_cycle_time_s = 30;
+  int page_two_size, rc;
+  const int max_power_on_cycle_time_s = 60;
   const int dev_check_period = 1;
 
-  read_ses_pages(sg_fd, &pages, &page_two_size);
+  rc = read_ses_pages(sg_fd, &pages, &page_two_size);
+  if (0 != rc) {
+    perr("Couldn't read ses pages: %d\n", rc);
+    return rc;
+  }
   interpret_ses_pages(&pages, &ses_status);
   if (slot_id < 0 || slot_id >= ses_status.slot_count) {
     perr("Slot_id %d is invalid\n", slot_id);
@@ -464,50 +520,70 @@ int jbod_hdd_power_on_with_timeout(int sg_fd, int slot_id,
 
   int start_time = time(NULL);
   int end_time = start_time + timeout;
-  int sg_result = 0;
   do {
-    fetch_ses_status(sg_fd);
-    if (ses_info->slots[slot_id].dev_name && /* device on AND show dev_name */
-        (ses_info->slots[slot_id].device_off == 0)) {
+    memset(&ses_status, 0, sizeof(ses_status));
+    memset(&pages, 0, sizeof(pages));
+    page_two_size = 0;
+    rc = read_ses_pages(sg_fd, &pages, &page_two_size);
+    if (0 != rc) {
+      perr("Couldn't read ses pages: %d\n", rc);
+      return rc;
+    }
+    interpret_ses_pages(&pages, &ses_status);
+
+    if (ses_status.slots[slot_id].dev_name && /* device on AND show dev_name */
+        (ses_status.slots[slot_id].device_off == 0)) {
       perr("slot %d is already powered and has a device, %s\n", slot_id,
-        ses_info->slots[slot_id].dev_name);
+        ses_status.slots[slot_id].dev_name);
       return 0;
     }
     if (cold_storage) {
       int slot_to_power_off = 0;
-      for (; slot_to_power_off < ses_info->slot_count; ++slot_to_power_off) {
+      for (; slot_to_power_off < ses_status.slot_count; ++slot_to_power_off) {
         jbod_hdd_power_off_with_timeout(sg_fd, slot_to_power_off, 5, cold_storage);
       }
     }
     control_hdd_power(pages.page_two, ses_status.slots + slot_id, 1);
-    sg_result = sg_send_ses_page(sg_fd, pages.page_two, page_two_size);
+    // TODO(xuanji): we ignore the return value of this
+    sg_send_ses_page(sg_fd, pages.page_two, page_two_size);
+    memset(&pages, 0, sizeof(pages));
+    page_two_size = 0;
+    rc = read_ses_pages(sg_fd, &pages, &page_two_size);
+    if (0 != rc) {
+      perr("Couldn't read ses pages: %d\n", rc);
+      return rc;
+    }
+    if (!check_hdd_power(pages.page_two, ses_status.slots + slot_id))
+      return -2;
     if (timeout < 0) {
       timeout = 0;
     }
     if (timeout == 0) {
-      return sg_result;
+      return 0;
     }
     int i = 0;
     for (i = 0; i < max_power_on_cycle_time_s; ++i) {
       if (i % dev_check_period == 0) {
-        fetch_ses_status(sg_fd);
-        if (!ses_info->slots[slot_id].dev_name) {
+        rc = fetch_ses_status(sg_fd, &ses_status);
+        if (0 != rc) {
+          perr("Couldn't fetch ses status: %d", rc);
+          return rc;
+        }
+        if (ses_status.slots[slot_id].dev_name == NULL) {
           if (end_time < time(NULL)) {
             perr("the device didn't show up before timeout\n");
 
-            // This is intentionally not a return 1. We want to know if we
-            // were unable to spin up a disk when we supply a timeout.
-            exit(1);
+            return -1;
           }
         } else {
-          return sg_result;
+          return 0;
         }
       }
       sleep(1);
     }
   } while (1);
 
-  return sg_result;
+  return 0;
 }
 
 int jbod_hdd_power_control (int sg_fd, int slot_id, int op,
@@ -516,12 +592,20 @@ int jbod_hdd_power_control (int sg_fd, int slot_id, int op,
   if (op == 1) {
     int power_on_res = jbod_hdd_power_on_with_timeout(sg_fd, slot_id,
                                                       timeout, cold_storage);
+    if (power_on_res == -1)
+      // Timeout expired before we could confirm that the disk powered on, so
+      // the disk is in an unknown state. Exit with error.
+      exit(1);
+    else if (power_on_res == -2)
+      exit(2);
   } else {
-    int power_off_res = jbod_hdd_power_off_with_timeout(sg_fd, slot_id,
+    /* TODO: (ngie) T28635337 use `power_off_res`
+    int power_off_res =
+    */ jbod_hdd_power_off_with_timeout(sg_fd, slot_id,
                                                         timeout, cold_storage);
   }
 
-  return 0;  /* TODO: t5933339 */
+  return 0;  /* TODO: maybe fix this */
 }
 
 int jbod_hdd_led_control (int sg_fd, int slot_id, int op)
@@ -539,8 +623,7 @@ int jbod_hdd_led_control (int sg_fd, int slot_id, int op)
     return EINVAL;
   }
   control_hdd_led_fault(pages.page_two, ses_status.slots + slot_id, op);
-  sg_send_ses_page(sg_fd, pages.page_two, page_two_size);
-  return 0; /* TODO: t5933339 */
+  return sg_send_ses_page(sg_fd, pages.page_two, page_two_size);
 }
 
 void jbod_power_cycle_enclosure(int sg_fd)
@@ -651,6 +734,8 @@ void jbod_print_asset_tag(int sg_fd)
 
 void jbod_set_asset_tag(int sg_fd, int tag_id, char *tag)
 {
+  int len;
+
   if (asset_tag_list == NULL || asset_tag_count == -1) {
     perr("Asset set is not supported.\n");
   }
@@ -658,9 +743,15 @@ void jbod_set_asset_tag(int sg_fd, int tag_id, char *tag)
     perr("Invalid tag ID: %d\n", tag_id);
     return;
   }
+
+  len = asset_tag_list[tag_id]->len;
+
+  if (len > strlen(tag))
+    len = strlen(tag);
+
   scsi_write_buffer(sg_fd, asset_tag_list[tag_id]->buf_id,
                     asset_tag_list[tag_id]->buf_offset,
-                    (unsigned char*) tag, asset_tag_list[tag_id]->len);
+                    (unsigned char*) tag, len);
   perr("Updated tag ID: %d\n", tag_id);
 }
 
@@ -680,7 +771,6 @@ void jbod_set_asset_tag_by_name(int sg_fd, char *tag_name, char *tag)
     }
   }
   perr("Invalid tag: %s\n", tag_name);
-  return;
 }
 
 struct led_info *jbod_leds = NULL;
@@ -715,9 +805,9 @@ void jbod_control_sys_led(int sg_fd, int led_id, int value)
 }
 
 struct config_item all_configs[3] = {
-  {-1, -1, "Power Window"},
-  {-1, -1, "HDD Temperature Interval"},
-  {-1, -1, "Fan Profile"}};
+  {-1, -1, "Power Window", NULL, NULL},
+  {-1, -1, "HDD Temperature Interval", NULL, NULL},
+  {-1, -1, "Fan Profile", NULL, NULL}};
 
 void jbod_show_config(int sg_fd)
 {
@@ -725,7 +815,9 @@ void jbod_show_config(int sg_fd)
   unsigned char buf[1];
 
   for (i = 0; i < 3; i ++) {
-    if (all_configs[i].buffer_id != -1 &&
+    if (all_configs[i].show_func)
+      all_configs[i].show_func(sg_fd, all_configs + i);
+    else if (all_configs[i].buffer_id != -1 &&
         all_configs[i].buffer_offset != -1) {
       scsi_read_buffer(sg_fd, all_configs[i].buffer_id,
                        0, buf, all_configs[i].buffer_offset + 1);
@@ -735,7 +827,7 @@ void jbod_show_config(int sg_fd)
       PRINT_JSON_GROUP_SEPARATE;
       PRINT_JSON_GROUP_HEADER(all_configs[i].name);
       PRINT_JSON_ITEM("name", "%s", all_configs[i].name);
-      PRINT_JSON_LAST_ITEM("value", "%d", buf[i]);
+      PRINT_JSON_LAST_ITEM("value", "%d", buf[all_configs[i].buffer_offset]);
       PRINT_JSON_GROUP_ENDING;
 
     }
@@ -745,7 +837,9 @@ void jbod_show_config(int sg_fd)
 void change_config(int sg_fd, int val, struct config_item *config)
 {
   unsigned char buf[1] = {((unsigned char)(val & 0xff))};
-  if (config->buffer_id != -1 &&
+  if (config->change_func)
+    config->change_func(sg_fd, val, config);
+  else if (config->buffer_id != -1 &&
       config->buffer_offset != -1) {
     scsi_write_buffer(sg_fd, config->buffer_id, config->buffer_offset, buf, 1);
   } else {

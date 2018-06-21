@@ -7,7 +7,6 @@
  * of patent rights can be found in the PATENTS file in the same directory.
  */
 
-#include <string.h>
 #include "enclosure_info.h"
 
 int extract_enclosure_control(

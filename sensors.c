@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include "sensors.h"
 #include "ses.h"
-#include "options.h"
 #include "json.h"
 
 void print_temperature_sensor_threshold(struct temperature_sensor *sensor)

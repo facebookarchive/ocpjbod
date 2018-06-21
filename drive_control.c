@@ -12,24 +12,22 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <unistd.h>
 #include <string.h>
 #include <scsi/sg_lib.h>
-#include <scsi/sg_cmds.h>
 
 #include "common.h"
 #include "drive_control.h"
 
 /* /dev/sdXX => sdXX */
-char *dev_short_name(char *devname)
+char *dev_short_name(const char *devname)
 {
   if (!devname)
     return NULL;
   return strstr(devname, "sd");
 }
 
-static char *sysfs_scsi_disk_handle(char *devname, char *fname,
+static char *sysfs_scsi_disk_handle(const char *devname, char *fname,
                                     const char *handle)
 {
   DIR *dir;
@@ -90,30 +88,9 @@ static int write_string_to_file(const char *fname, const char *s)
   return ret;
 }
 
-/*
-static int read_string_from_file(const char *fname, char *buf, int len)
-{
-  int fd, ret;
-
-  if (!fname || !buf || len <= 0)
-    return -1;
-
-  fd = open(fname, O_RDONLY);
-  if (fd < 0) {
-    perr("Cannot open %s.\n", fname);
-    return -1;
-  }
-
-  ret = read(fd, buf, len);
-  close(fd);
-  return ret;
-}
-*/
-static int enable_manage_start_stop(char *devname)
+static int enable_manage_start_stop(const char *devname)
 {
   char fname[PATH_MAX];
-  int fd;
-  int ret;
 
   if (!devname)
     return 1;
@@ -147,49 +124,75 @@ int wait_device_delete(char *sys_device_path, int timeout)
   return 1;
 }
 
-int wait_device_busy_zero(char *shortname, int timeout)
+/* returns 1 for match,
+ *         0 for not match
+ */
+int sas_address_matches(const char *shortname, const char *sas_addr_str)
 {
-  int count;
-  char filename[PATH_MAX];
-  char buf[64];
-  int device_busy;
-  int fd;
+  char sas_address_file[PATH_MAX];
+  char buf[SAS_ADDR_STR_LENGTH + 4] = {0}; /* "0x" + sas address str + "\n\0" */
+  int fd, readlen;
 
-  if (!shortname || timeout <= 0)
-    return 1;
+  if (!shortname || !sas_addr_str)
+    return 0;  /* not match */
+  snprintf(sas_address_file, PATH_MAX,
+           "/sys/block/%s/device/sas_address", shortname);
 
-  snprintf(filename, PATH_MAX, "/sys/block/%s/device/device_busy", shortname);
-
-  while (count < timeout) {
-    sleep(1);
-    fd = open(filename, O_RDONLY);
-    if (fd < 0) {
-      perr("Cannot open %s\n", filename);
-      return 1;
-    }
-    read(fd, buf, 64);
-    close(fd);
-    sscanf(buf, "%d\n", &device_busy);
-
-    if (device_busy == 0)
-      return 0;
-    ++count;
+  fd = open(sas_address_file, O_RDONLY);
+  if (fd < 0) {
+    perr("Cannot open %s\n", sas_address_file);
+    return 0;
   }
-  perr("wait_device_busy_zero failed after %d seconds.\n", timeout);
-  return 1;
 
+  readlen = read(fd, buf, SAS_ADDR_STR_LENGTH + 2);
+  close(fd);
+
+  if (readlen != SAS_ADDR_STR_LENGTH + 2)
+    return 0;
+
+  if (strncmp(buf + 2, sas_addr_str, SAS_ADDR_STR_LENGTH) == 0)
+    return 1;
+  return 0;
 }
 
-int remove_hdd(char *devname, const char *sas_addr_attr)
+/* returns 1 for device in "running" state,
+ *         0 for any other state
+ */
+int hdd_in_running_state(const char *shortname)
+{
+  char device_state_file[PATH_MAX];
+  char buf[64] = {0}; /* 0x + sas address in str */
+  int fd;
+  const char *running_str = "running";
+
+  if (!shortname)
+    return 0;  /* not running */
+
+  snprintf(device_state_file, PATH_MAX,
+           "/sys/block/%s/device/state", shortname);
+
+  fd = open(device_state_file, O_RDONLY);
+  if (fd < 0) {
+    perr("Cannot open %s\n", device_state_file);
+    return 0;
+  }
+
+  read(fd, buf, 64);
+  close(fd);
+
+  if (strncmp(buf, running_str, strlen(running_str)) == 0)
+    return 1;
+  return 0;
+}
+
+int remove_hdd(const char *devname, const char *sas_addr_str)
 {
   char sysfs_handle[PATH_MAX];
   char sys_disk_device_path[PATH_MAX];  /* /sys/block/sdX/device */
   char sys_device_path[PATH_MAX];  /* /sys/devices/X, for wait_device_delete */
   char *shortname = dev_short_name(devname);
-  char file_read_buf[256] = {0};
-  int read_len;
 
-  if (!devname || !shortname || !sas_addr_attr)
+  if (!devname || !shortname || !sas_addr_str)
     return 1;
 
   if (enable_manage_start_stop(devname)) {
@@ -202,19 +205,14 @@ int remove_hdd(char *devname, const char *sas_addr_attr)
     return 1;
   }
 
-/*
-  snprintf(sysfs_handle, PATH_MAX, "/sys/block/%s/device/state", shortname);
-
-  if (write_string_to_file(sysfs_handle, "offline\n") != 0) {
-    perr("Failed to offline device %s.\n", shortname);
+  /* IF SAS address of device does not matches SAS address from expander
+   * OR the device is not in "running" state
+   * skip echo 1 > delete
+   */
+  if (sas_address_matches(shortname, sas_addr_str) == 0 ||
+      hdd_in_running_state(shortname) == 0)
     return 1;
-  }
 
-  if (wait_device_busy_zero(shortname, 30) != 0) {
-    perr("Failed to drain IO for %s.\n", shortname);
-    return 1;
-  }
-*/
   snprintf(sysfs_handle, PATH_MAX, "/sys/block/%s/device/delete", shortname);
   if (write_string_to_file(sysfs_handle, "1") != 0)
     perr("Failed to write 1 to %s.\n", sysfs_handle);

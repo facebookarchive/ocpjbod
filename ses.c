@@ -8,6 +8,7 @@
  */
 
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +22,47 @@
 #include "expander.h"
 #include "array_device_slot.h"
 
+
+static int check_page_zero(unsigned char *page_zero)
+{
+  char supported_pages[MAX_SES_PAGE_ID] = {0};
+  const unsigned char required_pages[] = {0, 1, 2, 5, 7, 0xa, 0xe};
+  int i;
+
+  for (i = 0; i < page_zero[3]; i++) {
+    if (page_zero[4 + i] < MAX_SES_PAGE_ID) {
+      supported_pages[page_zero[4 + i]] = 1;
+    }
+  }
+
+  for (i = 0; i < sizeof(required_pages); i++) {
+    if (supported_pages[required_pages[i]] == 0) {
+      perr(
+          "Error: the system does not support required page %d\n",
+          (int)required_pages[i]);
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int
+validate_ses_page(int page_code, unsigned char* page_buf) {
+  if (page_code != page_buf[0]) {
+    perr(
+        "Error reading page 0x%x: expected 0x%x in byte 0, got 0x%x\n",
+        page_code,
+        page_code,
+        page_buf[0]);
+      return 1;
+  }
+  if (page_code == 0x0) {
+    return check_page_zero(page_buf);
+  }
+
+  return 0;
+}
+
 int sg_read_ses_page(int sg_fd, int page_code, unsigned char *buf,
                      int buf_size, int *count)
 {
@@ -28,10 +70,18 @@ int sg_read_ses_page(int sg_fd, int page_code, unsigned char *buf,
   ret = sg_ll_receive_diag(sg_fd, 1 /* pcv */, page_code, buf,
                            buf_size, 1, 0);
 
-  if (0 == ret)
+  if (0 == ret) {
     *count = (buf[2] << 8) + buf[3] + 4;
-  else
+    ret = validate_ses_page(page_code, buf);
+  } else {
+    perr(
+        "Error reading page 0x%x, sg_ll_receive_diag returned: %d\n",
+        page_code,
+        ret);
     *count = 0;
+    ret = EINVAL;
+  }
+
   return ret;
 }
 
@@ -73,51 +123,47 @@ int extract_element_list(
   return 0;
 }
 
-static int check_page_zero(unsigned char *page_zero)
-{
-  char supported_pages[MAX_SES_PAGE_ID] = {0};
-  const unsigned char required_pages[] = {0, 1, 2, 5, 7, 0xa, 0xe};
-  int i;
-
-  assert(page_zero[0] == 0);
-
-  for (i = 0; i < page_zero[3] ; i++)
-    if (page_zero[4 + i] < MAX_SES_PAGE_ID) {
-      supported_pages[page_zero[4 + i]] = 1;
-    }
-
-  for (i = 0; i < sizeof(required_pages); i++)
-    if (supported_pages[required_pages[i]] == 0) {
-      perr("Error: the system does not support required page %d\n",
-              (int) required_pages[i]);
-      return 1;
-    }
-  return 0;
-}
-
-void read_ses_pages(int sg_fd, struct ses_pages *pages,
+int read_ses_pages(int sg_fd, struct ses_pages *pages,
                     int *page_two_size)
 {
   int size = 0;
+  int rc = 0;
   assert(sg_fd > 0);
 
-  sg_read_ses_page(sg_fd, 0x0, pages->page_zero, 4096, & size);
-  check_page_zero(pages->page_zero);
+  rc = sg_read_ses_page(sg_fd, 0x0, pages->page_zero, MAX_SES_PAGE_SIZE, &size);
+  if (0 != rc) {
+    return rc;
+  }
 
-  sg_read_ses_page(sg_fd, 0x1, pages->page_one, 4096, & size);
-  sg_read_ses_page(sg_fd, 0x2, pages->page_two, 4096, & size);
+  rc = sg_read_ses_page(sg_fd, 0x1, pages->page_one, MAX_SES_PAGE_SIZE, &size);
+  if (0 != rc) {
+    return rc;
+  }
+
+  rc = sg_read_ses_page(sg_fd, 0x2, pages->page_two, MAX_SES_PAGE_SIZE, &size);
+  if (0 != rc) {
+    return rc;
+  }
   if (page_two_size)
     *page_two_size = size;
-  sg_read_ses_page(sg_fd, 0x5, pages->page_five, 4096, & size);
-  sg_read_ses_page(sg_fd, 0x7, pages->page_seven, 4096, & size);
-  sg_read_ses_page(sg_fd, 0xa, pages->page_a, 4096, & size);
 
+  rc = sg_read_ses_page(sg_fd, 0x5, pages->page_five, MAX_SES_PAGE_SIZE, &size);
+  if (0 != rc) {
+    return rc;
+  }
 
-  assert(pages->page_one[0] == 0x01);
-  assert(pages->page_two[0] == 0x02);
-  assert(pages->page_five[0] == 0x05);
-  assert(pages->page_seven[0] == 0x07);
-  assert(pages->page_a[0] == 0x0a);
+  rc =
+      sg_read_ses_page(sg_fd, 0x7, pages->page_seven, MAX_SES_PAGE_SIZE, &size);
+  if (0 != rc) {
+    return rc;
+  }
+
+  rc = sg_read_ses_page(sg_fd, 0xa, pages->page_a, MAX_SES_PAGE_SIZE, &size);
+  if (0 != rc) {
+    return rc;
+  }
+
+  return rc;
 }
 
 int interpret_ses_pages(
@@ -163,7 +209,8 @@ int interpret_ses_pages(
     for (j = 0; j < elem_list[i].count; j ++) {
       switch (elem_list[i].element_type) {
         case ARRAY_DEV_ETC:
-          assert(elem_list[i].count == OCP_SLOT_PER_ENCLOSURE);
+          assert(elem_list[i].count == OCP_SLOT_PER_ENCLOSURE ||
+                 elem_list[i].count == TRITON_SLOT_PER_ENCLOSURE);
           assert((pages->page_a[page_a_index] & 0x10) == 0x10);
           extract_array_device_slot_info(
             pages->page_two + page_two_index,
@@ -268,5 +315,6 @@ char *copy_description(unsigned char *description)
   char *name = (char *) malloc(len + 1);
   memcpy(name, description + 4, len);
   name[len] = '\0';
+  fix_none_ascii(name, len);
   return name;
 }

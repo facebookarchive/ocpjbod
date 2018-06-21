@@ -26,3 +26,14 @@ int sas_addr_invalid(unsigned char *addr)
   /* if first 4 bytes are all zero, the address is invalid */
   return (addr[0] == 0 && addr[1] == 0 && addr[2] == 0 && addr[3] == 0);
 }
+
+/* replace all non-ASCII char with space */
+void fix_none_ascii(char *buf, int len)
+{
+  int i;
+
+  for (i = 0; i < len; ++i)
+    if (buf[i] < 0x20 || buf[i] == 0x7f || buf[i] == '"' || buf[i] == '`')
+      /* remove none ASCII, ", and ` (workaround HoneyBadger bug) */
+      buf[i] = 0x20;
+}

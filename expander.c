@@ -37,7 +37,7 @@ int extract_expander_info(
   expander->name = copy_description(expander_description);
 
   for (i = 0; i < phy_count; i ++) {
-    phy_id = additional_expander_element[16 + 2 * i];
+    phy_id = i;
     slot_id = additional_expander_element[16 + 2 * i + 1];
     if (slot_id != 0xff) {
       slots[slot_id].phy = phy_id;

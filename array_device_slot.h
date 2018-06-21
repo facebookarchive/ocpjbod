@@ -33,6 +33,12 @@ struct array_device_slot {
   int page_two_offset;     /* for control */
 };
 
+/* human-readable form of array_device_slot.common_status */
+extern const char* fault_led_status_str(int);
+
+/* human-readable status */
+extern const char* status_str(struct array_device_slot);
+
 extern void print_array_device_slot(struct array_device_slot *slot);
 
 extern int extract_array_device_slot_info(
@@ -51,6 +57,10 @@ extern int control_hdd_led_fault(
   unsigned char *page_two,
   struct array_device_slot *slot,
   int op /* 0 for clear fault request; 1 for request fault */);
+
+extern int check_hdd_power(
+  unsigned char *page_two,
+  struct array_device_slot *slot);
 
 /* find OS dev name */
 extern int find_dev_name(
