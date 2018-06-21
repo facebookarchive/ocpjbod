@@ -13,9 +13,14 @@ ocpjbod requires or works with
 * Linux
 * sg3_utils-libs (>= 1.28)
 * sg3_utils-devel (>= 1.28)
+* libcurl
+* libcurl-devel
+* json-c
+* json-c-devel
+* switchtec-user
 
 ## Building ocpjbod
-1. Make sure gcc, make, sg3_utils-devel are installed.
+1. Make sure gcc, make and required libraries are installed.
 
 2. Run in ocpjbod directory:
 
