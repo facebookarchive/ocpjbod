@@ -37,3 +37,6 @@ After successful make, run in ocpjbod directory:
     ocpjbod hdd --hdd-on 0 /dev/sg1
 
     ocpjbod sensor /dev/sg1
+
+## License
+BSD

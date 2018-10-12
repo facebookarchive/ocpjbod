@@ -3,7 +3,8 @@ Name:       ocpjbod
 Version:    1.09
 Release:    1
 Group:      Facebook/System
-License:    Proprietary
+License:    Copyright (c) 2013-present, Facebook, Inc. All rights reserved.
+Vendor:     Facebook, Inc
 Source:     %{name}-%{version}.tar.gz
 Packager:   songliubraving
 Requires:   sg3_utils-libs >= 1.28
